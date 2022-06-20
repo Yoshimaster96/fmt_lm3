@@ -10,7 +10,8 @@ import math
 # Plugin options
 # =================================================================
 
-globalPath = None
+# globalPath = None
+globalPath = "D:\\Gaming\\Games-Switch\\Modding\\LuigisMansion3\\global"
 
 bLoadMaterials = True
 bLoadAnimations = True
@@ -265,6 +266,10 @@ class LM3ModelAsset:
 		self.b006Size = -1
 		self.b007Offset = -1
 		self.b007Size = -1
+		self.b00aOffset = -1
+		self.b00aSize = -1
+		self.b00bOffset = -1
+		self.b00bSize = -1
 		self.b102Offset = -1
 		self.b102Size = -1
 		self.b103Offset = -1
@@ -314,8 +319,18 @@ class LM3MeshAsset:
 		
 		self.indexCount = -1
 		self.vertexCount = -1
-		self.isSkinned = None		
-	
+		self.isSkinned = None
+		
+		self.morphCount = -1
+		self.morphOffset = -1
+		self.morphVtxBufferOffset = -1
+		self.morphIdxBufferOffset = -1
+
+class LM3MorphHeader:
+	def __init__(self):
+		self.hash = None
+		self.dataOffset = None
+
 # =================================================================
 # Load texture
 # =================================================================
@@ -496,6 +511,14 @@ def ExtractAssets():
 		elif chunk.dataType == 0xB007:
 			modelAssetList[modelIndex].b007Size = chunk.chunkSize
 			modelAssetList[modelIndex].b007Offset = chunk.chunkOffset
+		#Morph shape submesh info
+		elif chunk.dataType == 0xB00A:
+			modelAssetList[modelIndex].b00aSize = chunk.chunkSize
+			modelAssetList[modelIndex].b00aOffset = chunk.chunkOffset
+		#Morph shape index buffers
+		elif chunk.dataType == 0xB00B:
+			modelAssetList[modelIndex].b00bSize = chunk.chunkSize
+			modelAssetList[modelIndex].b00bOffset = chunk.chunkOffset
 		#Incomplete boneset coords
 		elif chunk.dataType == 0xB102:
 			modelAssetList[modelIndex].b102Size = chunk.chunkSize
@@ -551,7 +574,8 @@ def ExtractAssets():
 			bs52.readUShort()
 			bs52.readUShort()
 			bs52.readUInt64()
-			bs52.readUInt()
+			meshAsset.morphCount = bs52.readUShort()
+			meshAsset.morphOffset = bs52.readUShort()
 			meshAsset.isSkinned = True if bs52.readUInt() != 0xFFFFFFFF else False
 	
 			bs52.seek(checkPoint)
@@ -560,7 +584,8 @@ def ExtractAssets():
 			if(bs52.tell()+4<=b004Size):
 				meshAsset.vertexBufferOffset = bs52.readUInt()
 			if(bs52.tell()+4<=b004Size):
-				bs52.readUInt()
+				meshAsset.morphVtxBufferOffset = bs52.readUInt()
+				meshAsset.morphIdxBufferOffset = modelAsset.b00bOffset
 			if(bs52.tell()+4<=b004Size):
 				bs52.readUInt()
 			checkPoint = bs52.tell()			
@@ -971,11 +996,13 @@ def processModel(modelAssets):
 					bs53.readUInt() # 0, always ?
 					bs53.seek(0x18,1) # Not sure what the two first chunks mean
 					rotNoeKeyFramedValues = {}
-					posNoeKeyFramedValues = {}
 					scaleNoeKeyFramedValues = {}
+					posNoeKeyFramedValues = {}
+					morphNoeKeyFramedValues = {}
 					unknownRotOpcode = {}
-					unknownPosOpcode = {}
 					unknownScaleOpcode = {}
+					unknownPosOpcode = {}
+					unknownMorphOpcode = {}
 					for i in range(boneHeaderCount-2): #Sometimes additionnal chunks starting with 0x00000505, don't really care since we have offsets
 						boneHeader = LM3BoneHeader()
 						boneHeader.hash = hex(bs53.readUInt())
@@ -1010,53 +1037,77 @@ def processModel(modelAssets):
 									quaternion = NoeQuat([bs53.readFloat() for a in range(4)]).transpose()
 									rotationKeyframedValue = NoeKeyFramedValue(0,quaternion)
 									rotNoeKeyFramedValues[boneHeader.hash].append(rotationKeyframedValue)
-								# elif boneHeader.opcode == 0x16: #not sure at all
+								elif boneHeader.opcode == 0x16: #not sure at all
 									# flag to say nothing do be done ?
-									# bs53.seek(animationAsset.dataOffset + boneHeader.offset)
-									# quaternion = NoeQuat([bs53.readShort()/0x7FFF for a in range(4)]).transpose()
-									# rotationKeyframedValue = NoeKeyFramedValue(0,quaternion)
-									# rotNoeKeyFramedValues[boneHeader.hash].append(rotationKeyframedValue)
+									bs53.seek(animationAsset.dataOffset + boneHeader.offset)
+									quaternion = NoeQuat([bs53.readShort()/0x7FFF for a in range(4)]).transpose()
+									rotationKeyframedValue = NoeKeyFramedValue(0,quaternion)
+									rotNoeKeyFramedValues[boneHeader.hash].append(rotationKeyframedValue)
 								elif boneHeader.opcode == 0x17: #not sure at all
 									# Some weird thing is going on. Normalization or something needed ?							
 									bs53.seek(animationAsset.dataOffset + boneHeader.offset)
-									quaternion = NoeAngles([bs53.readShort()/180,0,0]).toQuat()
-									rotationKeyframedValue = NoeKeyFramedValue(0,quaternion)
-									rotNoeKeyFramedValues[boneHeader.hash].append(rotationKeyframedValue)
+									for j in range(frameCount):
+										quaternion = NoeAngles([-bs53.readShort()*90/0x4000,0,0]).toQuat()
+										rotationKeyframedValue = NoeKeyFramedValue(duration/frameCount*j,quaternion)
+										rotNoeKeyFramedValues[boneHeader.hash].append(rotationKeyframedValue)
 								elif boneHeader.opcode == 0x18: #somewhat confirmed (priestess cloth)
 									bs53.seek(animationAsset.dataOffset + boneHeader.offset)
 									for j in range(frameCount):
-										quaternion = NoeAngles([0,0,bs53.readShort()/180]).toQuat()
+										quaternion = NoeAngles([0,0,bs53.readShort()*90/0x4000]).toQuat()
 										rotationKeyframedValue = NoeKeyFramedValue(duration/frameCount*j,quaternion)
 										rotNoeKeyFramedValues[boneHeader.hash].append(rotationKeyframedValue)
 								elif boneHeader.opcode == 0x19: #somewhat confirmed (priestess arms)
 									bs53.seek(animationAsset.dataOffset + boneHeader.offset)
 									for j in range(frameCount):
-										quaternion = NoeAngles([0,bs53.readShort()/180,0]).toQuat()
+										quaternion = NoeAngles([0,bs53.readShort()*90/0x4000,0]).toQuat()
 										rotationKeyframedValue = NoeKeyFramedValue(duration/frameCount*j,quaternion)
 										rotNoeKeyFramedValues[boneHeader.hash].append(rotationKeyframedValue)
-								# elif boneHeader.opcode == 0x1A: #need confirm, king boo
-									# bs53.seek(animationAsset.dataOffset + boneHeader.offset)
-									# bs53.readShort()
-									# quaternion = NoeAngles([bs53.readShort()/180,0,0]).toQuat()
-									# rotationKeyframedValue = NoeKeyFramedValue(0,quaternion)
-									# rotNoeKeyFramedValues[boneHeader.hash].append(rotationKeyframedValue)
-								# elif boneHeader.opcode == 0x1B: #seen on maid
-									# bs53.seek(animationAsset.dataOffset + boneHeader.offset)
-									# bs53.readShort()
-									# quaternion = NoeAngles([bs53.readShort()/180,0,0]).toQuat()
-									# rotationKeyframedValue = NoeKeyFramedValue(0,quaternion)
-									# rotNoeKeyFramedValues[boneHeader.hash].append(rotationKeyframedValue)
-								# elif boneHeader.opcode == 0x1C: #need confirm (pianist tail)
-									# bs53.seek(animationAsset.dataOffset + boneHeader.offset)
-									# bs53.readShort()
-									# quaternion = NoeAngles([0,bs53.readShort()/180,0]).toQuat()
-									# rotationKeyframedValue = NoeKeyFramedValue(0,quaternion)
-									# rotNoeKeyFramedValues[boneHeader.hash].append(rotationKeyframedValue)
+								elif boneHeader.opcode == 0x1A: #need confirm, king boo
+									bs53.seek(animationAsset.dataOffset + boneHeader.offset)
+									quaternion = NoeAngles([-bs53.readInt()*90/0x40000000,0,0]).toQuat()
+									rotationKeyframedValue = NoeKeyFramedValue(0,quaternion)
+									rotNoeKeyFramedValues[boneHeader.hash].append(rotationKeyframedValue)
+								elif boneHeader.opcode == 0x1B: #seen on maid
+									bs53.seek(animationAsset.dataOffset + boneHeader.offset)
+									quaternion = NoeAngles([0,0,bs53.readInt()*90/0x40000000]).toQuat()
+									rotationKeyframedValue = NoeKeyFramedValue(0,quaternion)
+									rotNoeKeyFramedValues[boneHeader.hash].append(rotationKeyframedValue)
+								elif boneHeader.opcode == 0x1C: #need confirm (pianist tail)
+									bs53.seek(animationAsset.dataOffset + boneHeader.offset)
+									quaternion = NoeAngles([0,bs53.readInt()*90/0x40000000,0]).toQuat()
+									rotationKeyframedValue = NoeKeyFramedValue(0,quaternion)
+									rotNoeKeyFramedValues[boneHeader.hash].append(rotationKeyframedValue)
 								else:
 									if hex(boneHeader.opcode) in unknownRotOpcode:
 										unknownRotOpcode[hex(boneHeader.opcode)] += 1
 									else:
 										unknownRotOpcode[hex(boneHeader.opcode)] = 1
+							#Not confirmed at all, no clue yet. Probably something other than scale
+							# elif boneHeader.type == 2:
+								# scaleNoeKeyFramedValues[boneHeader.hash] = []
+								#0x27
+								#0x28
+								#0x29
+								# if boneHeader.opcode == 0x2A: #always of length 12 so either 6 HF or 3 F, don't have any clear example
+									# bs53.seek(animationAsset.dataOffset + boneHeader.offset)
+									# h0 = bs53.readHalfFloat()
+									# h1 = bs53.readHalfFloat()
+									# h2 = bs53.readHalfFloat()
+									# h3 = bs53.readHalfFloat()
+									# h4 = bs53.readHalfFloat()
+									# h5 = bs53.readHalfFloat()
+									# scale = NoeVec3([h0,h3,h5])
+									# scaleKeyFramedValue = NoeKeyFramedValue(0, scale)
+									# scaleNoeKeyFramedValues[boneHeader.hash].append(scaleKeyFramedValue)
+								#0x2B
+								#0x2C
+								#0x2D
+								#0x2E
+								# else:
+									if hex(boneHeader.opcode) in unknownScaleOpcode:
+										unknownScaleOpcode[hex(boneHeader.opcode)] += 1
+									else:
+										unknownScaleOpcode[hex(boneHeader.opcode)] = 1
 							#location
 							elif boneHeader.type == 3:
 								posNoeKeyFramedValues[boneHeader.hash] = []
@@ -1098,26 +1149,22 @@ def processModel(modelAssets):
 									posNoeKeyFramedValues[boneHeader.hash].append(positionKeyFramedValue)
 								elif boneHeader.opcode == 0xD: #confirmed (pianist movement)
 									bs53.seek(animationAsset.dataOffset + boneHeader.offset)
-									axis = bs53.readUInt()
-									bs53.readBytes(0x8)
+									b0 = bs53.readFloat()
+									b1 = bs53.readFloat()
+									b2 = bs53.readFloat()
 									count = bs53.readUInt()
 									for j in range(count):
-										data = bs53.readFloat()
-										if axis == 0:
-											position = NoeVec3([data,0,0])
-										elif axis == 1:
-											position = NoeVec3([0,data,0])
-										elif axis == 2:
-											position = NoeVec3([0,0,data])
+										position = NoeVec3([bs53.readFloat()+b0,b1,b2])
 										positionKeyFramedValue = NoeKeyFramedValue(duration/count*j, position)
 										posNoeKeyFramedValues[boneHeader.hash].append(positionKeyFramedValue)
 								elif boneHeader.opcode == 0xE: #confirmed somewhat (Hellen outfit)
 									bs53.seek(animationAsset.dataOffset+ boneHeader.offset)
-									a = bs53.readUInt()
-									bs53.readUShort()
+									b0 = bs53.readHalfFloat()
+									b1 = bs53.readHalfFloat()
+									b2 = bs53.readHalfFloat()
 									count = bs53.readUShort()
 									for j in range(count):
-										position = NoeVec3([bs53.readHalfFloat(),0,0])
+										position = NoeVec3([bs53.readHalfFloat()+b0,b1,b2])
 										positionKeyFramedValue = NoeKeyFramedValue(duration/count*j, position)
 										posNoeKeyFramedValues[boneHeader.hash].append(positionKeyFramedValue)
 								else:
@@ -1125,31 +1172,28 @@ def processModel(modelAssets):
 										unknownPosOpcode[hex(boneHeader.opcode)] += 1
 									else:
 										unknownPosOpcode[hex(boneHeader.opcode)] = 1
-							#Not confirmed at all, no clue yet. Probably something other than scale
-							# elif boneHeader.type == 2:
-								# scaleNoeKeyFramedValues[boneHeader.hash] = []
-								# posNoeKeyFramedValues[boneHeader.hash] = []
-								# if boneHeader.opcode == 0x2A: #always of length 12 so either 6 HF or 3 F, don't have any clear example
-									# bs53.seek(animationAsset.dataOffset + boneHeader.offset)
-									# scale = NoeVec3([bs53.readHalfFloat() for a in range(3)])
-									# scaleKeyFramedValue = NoeKeyFramedValue(0, scale)
-									# scaleNoeKeyFramedValues[boneHeader.hash].append(scaleKeyFramedValue)
-									# bs53.seek(animationAsset.dataOffset + boneHeader.offset)
-									# position = NoeVec3([bs53.readFloat() for a in range(3)])
-									# positionKeyFramedValue = NoeKeyFramedValue(0, position)
-									# posNoeKeyFramedValues[boneHeader.hash].append(positionKeyFramedValue)
+							#morphs
+							# elif boneHeader.type == 5:
+								# morphNoeKeyFramedValues[boneHeader.hash] = []
+								#0x04
+								#0x05
 								# else:
-									# if hex(boneHeader.opcode) in unknownScaleOpcode:
-										# unknownScaleOpcode[hex(boneHeader.opcode)] += 1
+									# if hex(boneHeader.opcode) in unknownMorphOpcode:
+										# unknownMorphOpcode[hex(boneHeader.opcode)] += 1
 									# else:
-										# unknownScaleOpcode[hex(boneHeader.opcode)] = 1
+										# unknownMorphOpcode[hex(boneHeader.opcode)] = 1
 						bs53.seek(checkpoint)
 					# print("anim " + str(animationindex))
 					# print(unknownRotOpcode)
 					# print(unknownPosOpcode)
+					# print(unknownScaleOpcode)
+					# print(unknownMorphOpcode)
 					for hash in modelAsset.hashToBoneID71:
 						if hash in posNoeKeyFramedValues or hash in rotNoeKeyFramedValues or hash in scaleNoeKeyFramedValues:
 							actionBone = NoeKeyFramedBone(modelAsset.hashToBoneID71[hash])
+							# if animationindex == 736:
+								# print("Bone ID " + str(modelAsset.hashToBoneID71[hash]))
+								# print(posNoeKeyFramedValues[hash])
 							#root bone rotation ignored as it seem to screw up some stuff
 							if hash in rotNoeKeyFramedValues and hash != "0x2e51a3":
 								actionBone.setRotation(rotNoeKeyFramedValues[hash], noesis.NOEKF_ROTATION_QUATERNION_4)
